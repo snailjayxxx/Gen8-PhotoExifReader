@@ -1,0 +1,47 @@
+#!/bin/sh
+set -eu
+
+PKG_DEST="${SYNOPKG_PKGDEST:-/var/packages/photoexifreader/target}"
+PKG_NAME="${SYNOPKG_PKGNAME:-photoexifreader}"
+VAR_DIR="${SYNOPKG_PKGVAR:-/var/packages/${PKG_NAME}/var}"
+PID_FILE="${VAR_DIR}/photoexifreader.pid"
+LOG_FILE="${VAR_DIR}/photoexifreader.log"
+PORT="9865"
+
+find_python() {
+  if [ -x "${PKG_DEST}/runtime/bin/python3" ]; then echo "${PKG_DEST}/runtime/bin/python3"; return; fi
+  command -v python3 2>/dev/null || true
+}
+
+start_pkg() {
+  mkdir -p "${VAR_DIR}"
+  if [ -f "${PID_FILE}" ] && kill -0 "$(cat "${PID_FILE}")" 2>/dev/null; then return 0; fi
+  PYTHON="$(find_python)"
+  [ -n "${PYTHON}" ] || { echo "python3 not found" >>"${LOG_FILE}"; return 1; }
+  cd "${PKG_DEST}"
+  PHOTOEXIF_DATA_DIR="${VAR_DIR}" nohup "${PYTHON}" -m backend.app --host 0.0.0.0 --port "${PORT}" >>"${LOG_FILE}" 2>&1 &
+  echo $! >"${PID_FILE}"
+}
+
+stop_pkg() {
+  if [ -f "${PID_FILE}" ]; then
+    PID="$(cat "${PID_FILE}")"
+    kill "${PID}" 2>/dev/null || true
+    i=0
+    while kill -0 "${PID}" 2>/dev/null && [ "$i" -lt 20 ]; do sleep 1; i=$((i+1)); done
+    kill -9 "${PID}" 2>/dev/null || true
+    rm -f "${PID_FILE}"
+  fi
+}
+
+status_pkg() {
+  [ -f "${PID_FILE}" ] && kill -0 "$(cat "${PID_FILE}")" 2>/dev/null
+}
+
+case "${1:-}" in
+  start) start_pkg ;;
+  stop) stop_pkg ;;
+  restart) stop_pkg; start_pkg ;;
+  status) status_pkg ;;
+  *) exit 1 ;;
+esac

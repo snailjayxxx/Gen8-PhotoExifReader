@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Gen8 Photo EXIF Reader</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <aside class="sidebar">
+    <div class="brand"><div class="logo">◉</div><div><strong>Photo EXIF</strong><span>摄影档案</span></div></div>
+    <button class="nav active" data-page="dashboard">总览</button>
+    <button class="nav" data-page="photos">照片索引</button>
+    <button class="nav" data-page="settings">设置</button>
+    <div class="sidebar-foot"><span id="healthDot" class="dot"></span><span id="healthText">连接中</span></div>
+  </aside>
+
+  <main>
+    <header>
+      <div><p class="eyebrow">个人摄影数据库</p><h1 id="pageTitle">摄影总览</h1></div>
+      <div class="actions"><span id="scanState" class="muted"></span><button id="scanBtn" class="primary">扫描照片库</button></div>
+    </header>
+
+    <section id="dashboardPage" class="page active">
+      <div class="cards">
+        <article><span>实际拍摄</span><strong id="captureCount">0</strong><small>Capture，RAW/JPG/修图合并</small></article>
+        <article><span>图片文件</span><strong id="fileCount">0</strong><small>NAS 上实际索引文件</small></article>
+        <article><span>RAW 文件</span><strong id="rawCount">0</strong><small>用于主要 EXIF 分布统计</small></article>
+        <article><span>已修图 Capture</span><strong id="editedCount">0</strong><small id="editRate">修图率 0%</small></article>
+      </div>
+      <div class="grid">
+        <section class="panel"><div class="panel-title"><h2>摄影主题</h2><span>顶层文件夹</span></div><div id="themes" class="bars empty">暂无数据</div></section>
+        <section class="panel"><div class="panel-title"><h2>相机</h2><span>文件统计</span></div><div id="cameras" class="bars empty">暂无数据</div></section>
+        <section class="panel"><div class="panel-title"><h2>镜头</h2><span>文件统计</span></div><div id="lenses" class="bars empty">暂无数据</div></section>
+        <section class="panel"><div class="panel-title"><h2>文件角色</h2><span>RAW / JPG / 修图</span></div><div id="roles" class="bars empty">暂无数据</div></section>
+        <section class="panel"><div class="panel-title"><h2>常用光圈</h2><span>RAW</span></div><div id="apertures" class="bars empty">暂无数据</div></section>
+        <section class="panel"><div class="panel-title"><h2>常用 ISO</h2><span>RAW</span></div><div id="iso" class="bars empty">暂无数据</div></section>
+        <section class="panel"><div class="panel-title"><h2>焦段分布</h2><span>实际焦距 · RAW</span></div><div id="focalLengths" class="bars empty">暂无数据</div></section>
+        <section class="panel"><div class="panel-title"><h2>快门分布</h2><span>标准档位近似 · RAW</span></div><div id="shutters" class="bars empty">暂无数据</div></section>
+      </div>
+    </section>
+
+    <section id="photosPage" class="page">
+      <div class="panel wide">
+        <div class="panel-title"><h2>最近索引文件</h2><button id="refreshPhotos" class="ghost">刷新</button></div>
+        <div class="table-wrap"><table><thead><tr><th>文件</th><th>主题</th><th>角色</th><th>时间</th><th>相机 / 镜头</th><th>EXIF</th></tr></thead><tbody id="photosBody"></tbody></table></div>
+      </div>
+    </section>
+
+    <section id="settingsPage" class="page">
+      <div class="panel wide settings-panel">
+        <div class="panel-title"><div><h2>照片库</h2><span>每行：名称 | NAS绝对路径</span></div><button id="saveSettings" class="primary">保存设置</button></div>
+        <textarea id="librariesInput" rows="7" placeholder="我的摄影库 | /volume1/photo"></textarea>
+        <p class="tip">顶层文件夹会自动作为摄影主题。示例：/volume1/photo/旅游、/volume1/photo/散步、/volume1/photo/拍娃。</p>
+        <hr>
+        <label>修图目录关键字</label><input id="editedKeywords" type="text" placeholder="修图, 成片, edited, Lightroom, LR">
+        <label>机内 JPG 目录关键字</label><input id="jpegKeywords" type="text" placeholder="jpg, jpeg, 直出">
+        <label>RAW 目录关键字</label><input id="rawKeywords" type="text" placeholder="raw, 原片">
+        <p class="tip">目录关键字采用“包含”匹配，所以“名古屋RAW”“2026RAW”等都能识别。文件扩展名仍然是 RAW 判断的主要依据。</p>
+      </div>
+    </section>
+  </main>
+  <script src="/app.js"></script>
+</body>
+</html>
