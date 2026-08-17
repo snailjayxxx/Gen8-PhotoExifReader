@@ -107,7 +107,7 @@ jobs:
           test -x /tmp/spk-verify/payload/vendor/exiftool/exiftool
           test -x /tmp/spk-verify/payload/native/diag-server
           ldd /tmp/spk-verify/payload/runtime/bin/python3 || true
-          /tmp/spk-verify/payload/vendor/exiftool/exiftool -ver | grep -q '13.59'
+          /tmp/spk-verify/payload/vendor/exiftool/exiftool -ver | grep -q '13.55'
 
           printf '\377\330\377\331' > /tmp/spk-verify/library/test.jpg
           cat > /tmp/spk-verify/data/config.json <<JSON
@@ -143,7 +143,7 @@ jobs:
           assert health == {'ok': True, 'version': '0.1.1-0005', 'mode': 'python'}, health
           runtime=get('/api/runtime')
           assert runtime['exiftool']['ok'] is True, runtime
-          assert runtime['exiftool']['version'] == '13.59', runtime
+          assert runtime['exiftool']['version'] == '13.55', runtime
           post('/api/scan')
           for _ in range(30):
               state=get('/api/scan/status')
