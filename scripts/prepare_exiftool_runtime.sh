@@ -5,7 +5,7 @@ ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 cd "$ROOT"
 
 rm -rf vendor /tmp/exiftool-src /tmp/exiftool.tar.gz
-mkdir -p vendor/perl/bin vendor/perl/lib vendor/musl /tmp/exiftool-src
+mkdir -p vendor/perl/bin vendor/perl/lib vendor/perl/share vendor/musl /tmp/exiftool-src
 
 HOST_UID="$(id -u)"
 HOST_GID="$(id -g)"
@@ -22,9 +22,10 @@ docker run --rm \
   sh -euxc '
     apk add --no-cache perl
 
-    mkdir -p /work/vendor/perl/bin /work/vendor/perl/lib /work/vendor/musl
+    mkdir -p /work/vendor/perl/bin /work/vendor/perl/lib /work/vendor/perl/share /work/vendor/musl
     cp -L /usr/bin/perl /work/vendor/perl/bin/perl
     cp -a /usr/lib/perl5 /work/vendor/perl/lib/
+    cp -a /usr/share/perl5 /work/vendor/perl/share/
 
     # Keep the Alpine musl loader/libc and any direct shared-library
     # dependencies used by Perl/core XS modules together in one directory.
@@ -48,13 +49,16 @@ LOADER="vendor/musl/ld-musl-x86_64.so.1"
 test -e "$LOADER"
 chmod 755 "$LOADER" || true
 
-# Build PERL5LIB for the relocated Alpine tree. Add one architecture level
-# because core XS modules (Encode/POSIX/etc.) live there.
+# Build PERL5LIB for the relocated Alpine tree. Alpine splits core Perl modules
+# between /usr/lib/perl5 and /usr/share/perl5, so both trees are required.
 PERL5LIB_PATH=""
 for base in \
   "$ROOT/vendor/perl/lib/perl5/core_perl" \
   "$ROOT/vendor/perl/lib/perl5/vendor_perl" \
-  "$ROOT/vendor/perl/lib/perl5/site_perl"
+  "$ROOT/vendor/perl/lib/perl5/site_perl" \
+  "$ROOT/vendor/perl/share/perl5/core_perl" \
+  "$ROOT/vendor/perl/share/perl5/vendor_perl" \
+  "$ROOT/vendor/perl/share/perl5/site_perl"
 do
   [ -d "$base" ] || continue
   if [ -z "$PERL5LIB_PATH" ]; then PERL5LIB_PATH="$base"; else PERL5LIB_PATH="$PERL5LIB_PATH:$base"; fi
@@ -67,7 +71,7 @@ done
 test -n "$PERL5LIB_PATH"
 PERL5LIB="$PERL5LIB_PATH" \
   "$ROOT/$LOADER" --library-path "$ROOT/vendor/musl" "$ROOT/vendor/perl/bin/perl" \
-  -e 'use Encode; use File::Basename; use File::Spec; use POSIX; print qq(bundled perl ok: $^V\n)'
+  -e 'use strict; use warnings; use Encode; use File::Basename; use File::Spec; use POSIX; print qq(bundled perl ok: $^V\n)'
 
 curl -fL --retry 3 --retry-delay 2 \
   https://exiftool.org/Image-ExifTool-13.59.tar.gz \
@@ -88,7 +92,10 @@ PERL5LIB="$HERE/lib"
 for base in \
   "$PERL_ROOT/lib/perl5/core_perl" \
   "$PERL_ROOT/lib/perl5/vendor_perl" \
-  "$PERL_ROOT/lib/perl5/site_perl"
+  "$PERL_ROOT/lib/perl5/site_perl" \
+  "$PERL_ROOT/share/perl5/core_perl" \
+  "$PERL_ROOT/share/perl5/vendor_perl" \
+  "$PERL_ROOT/share/perl5/site_perl"
 do
   [ -d "$base" ] || continue
   PERL5LIB="$PERL5LIB:$base"
