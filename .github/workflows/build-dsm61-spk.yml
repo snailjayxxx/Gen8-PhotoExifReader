@@ -16,21 +16,43 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Prepare bundled CPython 3.10 musl runtime
+      - name: Prepare static bundled CPython 3.10 runtime
         shell: bash
         run: |
           set -euxo pipefail
           rm -rf runtime /tmp/python-standalone
           mkdir -p /tmp/python-standalone
-          BASE='https://github.com/astral-sh/python-build-standalone/releases/download/20260718'
-          STRIPPED='cpython-3.10.20%2B20260718-x86_64-unknown-linux-musl-install_only_stripped.tar.gz'
-          FULL='cpython-3.10.20%2B20260718-x86_64-unknown-linux-musl-install_only.tar.gz'
-          if ! curl -fL --retry 3 -o /tmp/python-runtime.tar.gz "$BASE/$STRIPPED"; then
-            curl -fL --retry 3 -o /tmp/python-runtime.tar.gz "$BASE/$FULL"
-          fi
-          tar -xzf /tmp/python-runtime.tar.gz -C /tmp/python-standalone
-          test -x /tmp/python-standalone/python/bin/python3
-          mv /tmp/python-standalone/python runtime
+
+          # Baseline x86_64 + musl + static build: no host glibc/musl loader is required.
+          URL='https://github.com/astral-sh/python-build-standalone/releases/download/20260718/cpython-3.10.20%2B20260718-x86_64-unknown-linux-musl-noopt%2Bstatic-full.tar.zst'
+          curl -fL --retry 3 --retry-delay 2 -o /tmp/python-runtime.tar.zst "$URL"
+
+          sudo apt-get update
+          sudo apt-get install -y zstd
+          tar --zstd -xf /tmp/python-runtime.tar.zst -C /tmp/python-standalone
+
+          test -x /tmp/python-standalone/python/install/bin/python3
+          mv /tmp/python-standalone/python/install runtime
+
+          file runtime/bin/python3
+          ldd runtime/bin/python3 || true
+          PYTHONHOME="$PWD/runtime" PYTHONNOUSERSITE=1 runtime/bin/python3 --version
+          PYTHONHOME="$PWD/runtime" PYTHONNOUSERSITE=1 runtime/bin/python3 - <<'PY'
+          import http.server
+          import json
+          import os
+          import sqlite3
+          import subprocess
+          import sys
+          import threading
+          conn = sqlite3.connect(':memory:')
+          assert conn.execute('select 1').fetchone() == (1,)
+          conn.close()
+          print('runtime self-test:', sys.version, sqlite3.sqlite_version)
+          PY
+
+          # Keep the runtime conservative for this first NAS build. Remove only obvious
+          # developer/demo material after the required stdlib modules have passed.
           rm -rf \
             runtime/lib/python3.10/test \
             runtime/lib/python3.10/idlelib \
@@ -39,28 +61,18 @@ jobs:
             runtime/lib/python3.10/ensurepip \
             runtime/share \
             runtime/include || true
-          PYTHONHOME="$PWD/runtime" runtime/bin/python3 --version
-          PYTHONHOME="$PWD/runtime" runtime/bin/python3 - <<'PY'
-          import http.server
-          import json
-          import sqlite3
-          import sys
-          conn = sqlite3.connect(':memory:')
-          assert conn.execute('select 1').fetchone() == (1,)
-          conn.close()
-          print('runtime self-test:', sys.version, sqlite3.sqlite_version)
-          PY
+
           printf '%s\n' \
             'python-build-standalone 20260718' \
             'CPython 3.10.20' \
-            'x86_64-unknown-linux-musl' > runtime/RUNTIME_SOURCE.txt
+            'x86_64-unknown-linux-musl-noopt+static-full' > runtime/RUNTIME_SOURCE.txt
 
       - name: Restore DSM package icons
         shell: bash
         run: |
           set -euo pipefail
           printf '%s' 'iVBORw0KGgoAAAANSUhEUgAAAEgAAABICAYAAABV7bNHAAACgElEQVR4nO2csVXEMAxAdTx6WlggqW4IRqBmA0oGoWQDakZgiKvuJmALqAwi2JZlS3Li6Fc8jvisf5IdG18ON3fTFzhJrnp3YO24IAIXROCCCK5bG7h9Pkv0Q5XPl7n62kPNLLYFKSm4stgltmU5APz+F2fQ1sXEKMmmogwaUQ5AWVykoFHlBKj4fJonyAoaPXsCuTiTgvYiJ5CK10uMwAURRAXtrbwCsbib12ISfDylX7t/tetHjFUIyoHl9ZC1CkHzdEy+dr6cfn4OsixFrUJQDiwvyLIUpS4Il0guU0oI12NR2pJUp3lJORjcVm6Al0BNUOj4PB1F5QRwu5qSVARhOdpoSxIXpJ3y1u+tNkhzsufx/RT9/dtDWRvzdPxzOyBJdMu1dqnBLa2UmCWlooKklpltuQ3bbbFaKof7t9KICeJkT03AJddoDNjmGdSSDT0yyVSQRIDWkkQEWd73UEiXmVkGSX7yllnkW64ELojABRG4IAIXRGAmqHQ9Zd0WhYigsDjUWlFzkFiwYkxLTOKTt8wegA5jUEuA1nIABAVxyqwm0JJrpMsLoOMsxpHUI3MCojuKAHUL19YtVwC57FnuKKrtSZ8vp2JJrRmiOXuKl1jP0xga760yBlneF2kMzBi1QRpL0hCF29XMWtVZDHdcUhJua9OHFwD+S2oRtbx+iOMvAL+BhFsAHCQ108WEDnuAaikKgFd6uzmChwOl/vuw+0OcvQVQ+I4iQVRQy3c8t0wsbs8gAhdEkBS0tzJLxZvNoL1IysXpJUZACho9i6j4ijJoVEklcbEfTTHCl+04Hzh7DNp6NnH7X/VwE8wWMsr86S97wqd5AhdE4IIIvgE/euz9VE6B4wAAAABJRU5ErkJggg==' | base64 -d > spk/PACKAGE_ICON.PNG
-          printf '%s' 'iVBORw0KGgoAAAANSUhEUgAAAQAAAAEACAYAAABccqhmAAAJuUlEQVR4nO3dvXUb1xaAUfAt5UzJBsBIRagEx+5AIQthqA4cuwQV4YiqgF3QgY0nGAI4f/fn3Dl7r/UiWzBmMOebM+AS39394/H9AKT0v95vAOhHACAxAYDEBAASEwBITAAgMQGAxAQAEhMASEwAIDEBgMQEABITAEhMACAxAYDEBAASEwBI7FPvN9DLw/Nr77dAMG8vT73fQnN3GX4lmGFnrb1HYbcBMPSUtscY7CoAhp5W9hKDXQTA4NPL6CEYNgCGnmhGjMGQPwY0/EQ04nU51AYw4gkmp1G2gSECYPAZVfQQhH8EMPyMLPr1GzoA0U8ezBH5Og75CBD5hMEW0R4Jwm0Ahp89i3Z9hwpAtJMDNUS6zsMEINJJgdqiXO8hAhDlZEBLEa777gGIcBKgl97Xf9cA9D54iKDnHHQLgOGHn3rNQ5cAGH74VY+56P4dANBP8wC4+8NtreejaQAMP0xrOSfNAmD4Yb5W8+I7AEisSQDc/WG5FnNjA4DEqgfA3R/Wqz0/VQNg+GG7mnPkEQASEwBIrFoArP9QTq15sgFAYlUC4O4P5dWYKxsAJCYAkFjxAFj/oZ7S82UDgMQMASKxKADwGQHk15soGAIlVC4AtAMqpNU82AEhMACCxqgHwGADb1Zyj6huACMB6tefHIwAk1iQAtgBYrsXc2AAgsWYBsAXAfK3mpekGIAIwreWcNH8EEAG4rfV8+A4AEusSAFsA/KrHXHTbAEQAfuo1D10fAUQA+s5B9+8ARIDMel//3QNwOPQ/CdBDhOs+RAAOhxgnA1qJcr2HCcDhEOekQE2RrvNQATgcYp0cKC3a9X13/3h87/0mbnl4fu39FqCIaIN/Em4DOBf1pMESka/j0AE4HGKfPJgS/foN/QhwySMBo4g++CdDBeBECIhqlME/Cf8IcM1oJ5kcRrwuh9wALtkI6GXEoT+3iwCcCAGtjD74J7sKwDkxoLS9DP253QbgnBiw1h6H/lyKAFwjClza+7BfkzYAwKA/BgTKEABITAAgMQGAxAQAEhMASEwAIDEBgMQEABITAEhMACAxAYDEBAASEwBITAAgMQGAxP4GwiETnEgSz8sAAAAASUVORK5CYII=' | base64 -d > spk/PACKAGE_ICON_256.PNG
+          printf '%s' 'iVBORw0KGgoAAAANSUhEUgAAAQAAAAEACAYAAABccqhmAAAJuUlEQVR4nO3dvXUb1xaAUfAt5UzJBsBIRagEx+5AIQthqA4cuwQV4YiqgF3QgY0nGAI4f/fn3Dl7r/UiWzBmMOebM+AS39394/H9AKT0v95vAOhHACAxAYDEBAASEwBITAAgMQGAxAQAEhMASEwAIDEBgMQEABITAEhMACAxAYDEBAASEwBI7FPvN9DLw/Nr77dAMG8vT73fQnN3GX4lmGFnrb1HYbcBMPSUtscY7CoAhp5W9hKDXQTA4NPL6CEYNgCGnmhGjMGQPwY0/EQ04nU51AYw4gkmp1G2gSECYPAZVfQQhH8EMPyMLPr1GzoA0U8ezBH5Og75CBD5hMEW0R4Jwm0Ahp89i3Z9hwpAtJMDNUS6zsMEINJJgdqiXO8hAhDlZEBLEa777gGIcBKgl97Xf9cA9D54iKDnHHQLgOGHn3rNQ5cAGH74VY+56P4dANBP8wC4+8NtreejaQAMP0xrOSfNAmD4Yb5W8+I7AEisSQDc/WG5FnNjA4DEqgfA3R/Wqz0/VQNg+GG7mnPkEQASEwBIrFoArP9QTq15sgFAYlUC4O4P5dWYKxsAJCYAkFjxAFj/oZ7S82UDgMQMASKxKADwGQHk15soGAIlVC4AtAMqpNU82AEhMACCxqgHwGADb1Zyj6huACMB6tefHIwAk1iQAtgBYrsXc2AAgsWYBsAXAfK3mpekGIAIwreWcNH8EEAG4rfV8+A4AEusSAFsA/KrHXHTbEQAfuo1D10fAUQA+s5B9+8ARIDMel//3QNwOPQ/CdBDhOs+RAAOhxgnA1qJcr2HCcDhEOekQE2RrvNQATgcYp0cKC3a9X13/3h87/0mbnl4fu39FqCIaIN/Em4DOBf1pMESka/j0AE4HGKfPJgS/foN/QhwySMBo4g++CdDBeBECIhqlME/Cf8IcM1oJ5kcRrwuh9wALtkI6GXEoT+3iwCcCAGtjD74J7sKwDkxoLS9DP253QbgnBiw1h6H/lyKAFwjClza+7BfkzYAwKA/BgTKEABITAAgMQGAxAQAEhMASEwAIDEBgMQEABITAEhMACAxAYDEBAASEwBITAAgMQGAxP4GwiETnEgSz8sAAAAASUVORK5CYII=' | base64 -d > spk/PACKAGE_ICON_256.PNG
           file spk/PACKAGE_ICON.PNG spk/PACKAGE_ICON_256.PNG
 
       - name: Build SPK
@@ -79,7 +91,9 @@ jobs:
           tar -xzf /tmp/spk-verify/root/package.tgz -C /tmp/spk-verify/payload
           test -x /tmp/spk-verify/payload/runtime/bin/python3
           test -x /tmp/spk-verify/payload/native/diag-server
-          PYTHONHOME=/tmp/spk-verify/payload/runtime /tmp/spk-verify/payload/runtime/bin/python3 -c 'import sqlite3, http.server; assert sqlite3.connect(":memory:").execute("select 1").fetchone() == (1,)'
+          file /tmp/spk-verify/payload/runtime/bin/python3
+          ldd /tmp/spk-verify/payload/runtime/bin/python3 || true
+          PYTHONHOME=/tmp/spk-verify/payload/runtime PYTHONNOUSERSITE=1 /tmp/spk-verify/payload/runtime/bin/python3 -c 'import sqlite3, http.server; assert sqlite3.connect(":memory:").execute("select 1").fetchone() == (1,)'
           (
             cd /tmp/spk-verify/payload
             PHOTOEXIF_DATA_DIR=/tmp/spk-verify/data \
