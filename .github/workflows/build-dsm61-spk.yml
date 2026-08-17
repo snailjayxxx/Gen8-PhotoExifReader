@@ -22,8 +22,8 @@ jobs:
           set -euxo pipefail
           sudo apt-get update
           sudo apt-get install -y zstd musl-tools build-essential
-          test -f /usr/lib/x86_64-linux-musl/libc.a
-          ls -l /usr/lib/x86_64-linux-musl/libc.a
+          test -e /usr/lib/x86_64-linux-musl/libc.so
+          file /usr/lib/x86_64-linux-musl/libc.so
 
       - name: Prepare static bundled CPython 3.10 runtime
         shell: bash
@@ -49,16 +49,20 @@ jobs:
           rm -rf runtime/lib/python3.10/test runtime/lib/python3.10/idlelib runtime/lib/python3.10/tkinter runtime/lib/python3.10/turtledemo runtime/lib/python3.10/ensurepip runtime/share runtime/include || true
           printf '%s\n' 'python-build-standalone 20260718' 'CPython 3.10.20' 'x86_64-unknown-linux-musl-noopt+static-full' > runtime/RUNTIME_SOURCE.txt
 
-      - name: Build static Perl and bundle ExifTool
+      - name: Build bundled musl Perl and ExifTool
         shell: bash
         run: |
           set -euxo pipefail
           rm -rf vendor /tmp/perl-src /tmp/exiftool-src
-          mkdir -p vendor /tmp/perl-src /tmp/exiftool-src
+          mkdir -p vendor/perl vendor/musl /tmp/perl-src /tmp/exiftool-src
+
+          # Bundle the musl loader itself so DSM does not need /lib/ld-musl-*.
+          cp -L /usr/lib/x86_64-linux-musl/libc.so vendor/musl/ld-musl-x86_64.so.1
+          chmod 755 vendor/musl/ld-musl-x86_64.so.1
+          file vendor/musl/ld-musl-x86_64.so.1
 
           curl -fL --retry 3 --retry-delay 2 https://www.cpan.org/src/5.0/perl-5.44.0.tar.gz -o /tmp/perl.tar.gz
           tar -xzf /tmp/perl.tar.gz -C /tmp/perl-src --strip-components=1
-          STATIC_EXT='attributes B Cwd Data/Dumper Devel/Peek Digest/MD5 Digest/SHA Encode Fcntl File/Glob Hash/Util I18N/Langinfo IO List/Util MIME/Base64 mro Opcode PerlIO/encoding PerlIO/scalar PerlIO/via POSIX re SDBM_File Socket Storable Sys/Hostname Tie/Hash/NamedCapture Time/HiRes Time/Piece Unicode/Normalize'
           (
             cd /tmp/perl-src
             ./Configure -des \
@@ -66,12 +70,10 @@ jobs:
               -Dcc=musl-gcc \
               -Dld=musl-gcc \
               -Dlibpth='/usr/lib/x86_64-linux-musl' \
-              -Dlibc='/usr/lib/x86_64-linux-musl/libc.a' \
+              -Dlibc='/usr/lib/x86_64-linux-musl/libc.so' \
               -Dlibs='-lpthread -ldl -lm -lutil -lc' \
-              -Dldflags='-static' \
               -Uuseshrplib \
-              -Uusedl \
-              -Dstatic_ext="$STATIC_EXT" \
+              -Dusedl \
               -Dman1dir=none \
               -Dman3dir=none
             make -j2
@@ -79,8 +81,13 @@ jobs:
           )
           test -x vendor/perl/bin/perl
           file vendor/perl/bin/perl
-          ldd vendor/perl/bin/perl || true
-          vendor/perl/bin/perl -e 'use Encode; use File::Basename; use File::Spec; use POSIX; print qq(static perl ok\n)'
+
+          PERL_LIB="$GITHUB_WORKSPACE/vendor/perl/lib/5.44.0"
+          PERL_ARCH="$(find "$PERL_LIB" -mindepth 1 -maxdepth 1 -type d | head -1)"
+          test -n "$PERL_ARCH"
+          vendor/musl/ld-musl-x86_64.so.1 --library-path /usr/lib/x86_64-linux-musl vendor/perl/bin/perl \
+            -I"$PERL_LIB" -I"$PERL_ARCH" \
+            -e 'use Encode; use File::Basename; use File::Spec; use POSIX; print qq(bundled perl ok\n)'
 
           curl -fL --retry 3 --retry-delay 2 https://exiftool.org/Image-ExifTool-13.59.tar.gz -o /tmp/exiftool.tar.gz
           tar -xzf /tmp/exiftool.tar.gz -C /tmp/exiftool-src --strip-components=1
@@ -90,16 +97,18 @@ jobs:
           cat > vendor/exiftool/exiftool <<'SH'
           #!/bin/sh
           HERE="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
-          PERL_ROOT="$HERE/../perl"
+          VENDOR_ROOT="$(CDPATH= cd -- "$HERE/.." && pwd)"
+          PERL_ROOT="$VENDOR_ROOT/perl"
+          LOADER="$VENDOR_ROOT/musl/ld-musl-x86_64.so.1"
           PERL5LIB="$HERE/lib:$PERL_ROOT/lib/5.44.0"
-          for d in "$PERL_ROOT"/lib/5.44.0/*linux*; do
+          for d in "$PERL_ROOT"/lib/5.44.0/*; do
             [ -d "$d" ] && PERL5LIB="$PERL5LIB:$d"
           done
           export PERL5LIB
-          exec "$PERL_ROOT/bin/perl" "$HERE/exiftool.pl" "$@"
+          exec "$LOADER" --library-path "$VENDOR_ROOT/musl" "$PERL_ROOT/bin/perl" "$HERE/exiftool.pl" "$@"
           SH
           chmod 755 vendor/exiftool/exiftool
-          printf '%s\n' 'ExifTool 13.59 from exiftool.org' 'Perl 5.44.0 static musl runtime' > vendor/exiftool/RUNTIME_SOURCE.txt
+          printf '%s\n' 'ExifTool 13.59 from exiftool.org' 'Perl 5.44.0 + bundled musl loader' > vendor/exiftool/RUNTIME_SOURCE.txt
           vendor/exiftool/exiftool -ver
           printf '\377\330\377\331' > /tmp/minimal.jpg
           vendor/exiftool/exiftool -json -n -SourceFile -FileType /tmp/minimal.jpg | tee /tmp/exiftool-test.json
@@ -151,10 +160,10 @@ jobs:
           tar -xzf /tmp/spk-verify/root/package.tgz -C /tmp/spk-verify/payload
           test -x /tmp/spk-verify/payload/runtime/bin/python3
           test -x /tmp/spk-verify/payload/vendor/perl/bin/perl
+          test -x /tmp/spk-verify/payload/vendor/musl/ld-musl-x86_64.so.1
           test -x /tmp/spk-verify/payload/vendor/exiftool/exiftool
           test -x /tmp/spk-verify/payload/native/diag-server
           ldd /tmp/spk-verify/payload/runtime/bin/python3 || true
-          ldd /tmp/spk-verify/payload/vendor/perl/bin/perl || true
           /tmp/spk-verify/payload/vendor/exiftool/exiftool -ver | grep -q '13.59'
           printf '\377\330\377\331' > /tmp/spk-verify/library/test.jpg
           cat > /tmp/spk-verify/data/config.json <<JSON
