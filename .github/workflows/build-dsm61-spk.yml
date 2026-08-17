@@ -22,6 +22,8 @@ jobs:
           set -euxo pipefail
           sudo apt-get update
           sudo apt-get install -y zstd musl-tools build-essential
+          test -f /usr/lib/x86_64-linux-musl/libc.a
+          ls -l /usr/lib/x86_64-linux-musl/libc.a
 
       - name: Prepare static bundled CPython 3.10 runtime
         shell: bash
@@ -63,6 +65,8 @@ jobs:
               -Dprefix="$GITHUB_WORKSPACE/vendor/perl" \
               -Dcc=musl-gcc \
               -Dld=musl-gcc \
+              -Dlibpth='/usr/lib/x86_64-linux-musl' \
+              -Dlibc='/usr/lib/x86_64-linux-musl/libc.a' \
               -Dlibs='-lpthread -ldl -lm -lutil -lc' \
               -Dldflags='-static' \
               -Uuseshrplib \
