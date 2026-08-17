@@ -15,6 +15,7 @@ from .settings import data_dir, load_config, save_config
 
 ROOT = Path(__file__).resolve().parents[1]
 FRONTEND = ROOT / "frontend"
+APP_VERSION = "0.1.1-0004"
 DB = Database(data_dir() / "photoexif.sqlite3")
 SCAN_LOCK = threading.Lock()
 SCAN_STATE = {"running": False, "last_result": None, "error": None}
@@ -31,7 +32,7 @@ def _scan_worker() -> None:
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "Gen8PhotoExifReader/0.1"
+    server_version = f"Gen8PhotoExifReader/{APP_VERSION}"
     def log_message(self, fmt: str, *args): print(f"[http] {self.address_string()} - {fmt % args}")
     def _json(self, payload, status=HTTPStatus.OK):
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
@@ -40,7 +41,7 @@ class Handler(BaseHTTPRequestHandler):
         length = int(self.headers.get("Content-Length", "0")); return json.loads(self.rfile.read(length).decode("utf-8") or "{}")
     def do_GET(self):
         parsed = urlparse(self.path)
-        if parsed.path == "/api/health": return self._json({"ok": True, "version": "0.1.0"})
+        if parsed.path == "/api/health": return self._json({"ok": True, "version": APP_VERSION, "mode": "python"})
         if parsed.path == "/api/dashboard": return self._json(DB.dashboard())
         if parsed.path == "/api/settings": return self._json(load_config())
         if parsed.path == "/api/scan/status": return self._json(SCAN_STATE)
@@ -75,7 +76,7 @@ class Handler(BaseHTTPRequestHandler):
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Gen8 Photo EXIF Reader"); parser.add_argument("--host", default="127.0.0.1"); parser.add_argument("--port", default=9865, type=int); args = parser.parse_args()
-    print(f"Gen8 Photo EXIF Reader listening on http://{args.host}:{args.port}")
+    print(f"Gen8 Photo EXIF Reader {APP_VERSION} listening on http://{args.host}:{args.port}")
     ThreadingHTTPServer((args.host, args.port), Handler).serve_forever()
 
 
