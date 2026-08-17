@@ -81,7 +81,7 @@ int main(int argc, char **argv) {
                 "<p>当前运行的是 <b>v0.1.1-0004 原生诊断模式</b>。0004 已把 Python Runtime 封装进 SPK；如果仍进入此页面，下面会显示内置 Runtime 或后端启动失败的具体原因。</p>"
                 "<p class=\"reason\"><b>完整 Python 后端未启动的原因：</b><br>%s</p>"
                 "<p>系统：<span class=\"mono\">%s %s</span> 架构：<span class=\"mono\">%s</span></p>"
-                "<p class=\"warn\\\">请把这个页面截图发回，我会继续针对这台 DSM 6.1+ Gen8 的实际兼容性修正。</p></div></div></body></html>",
+                "<p class=\"warn\">请把这个页面截图发回，我会继续针对这台 DSM 6.1+ Gen8 的实际兼容性修正。</p></div></div></body></html>",
                 reason, u.sysname, u.release, u.machine);
         }
         const char *ct = health ? "application/json" : "text/html";
