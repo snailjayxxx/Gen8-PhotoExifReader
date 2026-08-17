@@ -1,6 +1,7 @@
 #!/bin/sh
 PKG="Gen8PhotoExifReader"
 TARGET="${SYNOPKG_PKGDEST:-/var/packages/$PKG/target}"
+PKGVAR="${SYNOPKG_PKGVAR:-/var/packages/$PKG/var}"
 PIDFILE="/tmp/${PKG}.pid"
 LOGFILE="/tmp/${PKG}.log"
 MODEFILE="/tmp/${PKG}.mode"
@@ -18,7 +19,42 @@ find_python() {
   done
   return 1
 }
-python_is_usable() { "$1" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3,8) else 1)' >/dev/null 2>&1; }
+select_data_dir() {
+  for d in "$PKGVAR" "$TARGET/var" "/tmp/${PKG}-var"; do
+    [ -n "$d" ] || continue
+    mkdir -p "$d" 2>/dev/null || continue
+    TESTFILE="$d/.write-test.$$"
+    if (umask 077; : > "$TESTFILE") 2>/dev/null; then
+      rm -f "$TESTFILE"
+      echo "$d"
+      return 0
+    fi
+  done
+  return 1
+}
+python_version() {
+  if [ "$PYTHON" = "$TARGET/runtime/bin/python3" ]; then
+    PYTHONHOME="$TARGET/runtime" PYTHONNOUSERSITE=1 "$PYTHON" -c 'import sys; print("%d.%d.%d" % sys.version_info[:3])' 2>/dev/null
+  else
+    PYTHONNOUSERSITE=1 "$PYTHON" -c 'import sys; print("%d.%d.%d" % sys.version_info[:3])' 2>/dev/null
+  fi
+}
+python_self_test() {
+  CODE='import sys, sqlite3, json, http.server; assert sys.version_info >= (3,8); c=sqlite3.connect(":memory:"); assert c.execute("select 1").fetchone()[0] == 1; c.close()'
+  if [ "$PYTHON" = "$TARGET/runtime/bin/python3" ]; then
+    PYTHONHOME="$TARGET/runtime" PYTHONNOUSERSITE=1 "$PYTHON" -c "$CODE" >>"$LOGFILE" 2>&1
+  else
+    PYTHONNOUSERSITE=1 "$PYTHON" -c "$CODE" >>"$LOGFILE" 2>&1
+  fi
+}
+start_backend() {
+  if [ "$PYTHON" = "$TARGET/runtime/bin/python3" ]; then
+    PHOTOEXIF_DATA_DIR="$DATA_DIR" PYTHONHOME="$TARGET/runtime" PYTHONNOUSERSITE=1 PYTHONUNBUFFERED=1 "$PYTHON" -m backend.app --host 0.0.0.0 --port "$PORT" >>"$LOGFILE" 2>&1 &
+  else
+    PHOTOEXIF_DATA_DIR="$DATA_DIR" PYTHONNOUSERSITE=1 PYTHONUNBUFFERED=1 "$PYTHON" -m backend.app --host 0.0.0.0 --port "$PORT" >>"$LOGFILE" 2>&1 &
+  fi
+  BACKEND_PID=$!
+}
 start_native_diag() {
   REASON="$1"; NATIVE="$TARGET/native/diag-server"
   [ -x "$NATIVE" ] || { log "FATAL: native diagnostic server missing: $NATIVE"; return 1; }
@@ -29,7 +65,7 @@ start_native_diag() {
   log "FATAL: native diagnostic server exited immediately"; rm -f "$PIDFILE" "$MODEFILE"; return 1
 }
 
-case "$1" in
+case "${1:-}" in
   start)
     : > "$LOGFILE"
     is_running && exit 0
@@ -37,21 +73,34 @@ case "$1" in
     log "Start requested; target=$TARGET"
     [ "${PHOTOEXIF_FORCE_NATIVE_DIAG:-0}" = "1" ] && { start_native_diag "Forced native diagnostic mode"; exit $?; }
     PYTHON="$(find_python 2>/dev/null || true)"
-    if [ -n "$PYTHON" ]; then
-      PYVER="$($PYTHON -c 'import sys; print("%d.%d.%d" % sys.version_info[:3])' 2>/dev/null || echo unknown)"
-      log "Python candidate: $PYTHON version=$PYVER"
-      if python_is_usable "$PYTHON"; then
-        DATA_DIR="$TARGET/var"; mkdir -p "$DATA_DIR" 2>>"$LOGFILE" || true
-        cd "$TARGET" || { start_native_diag "Cannot cd to package target: $TARGET"; exit $?; }
-        PHOTOEXIF_DATA_DIR="$DATA_DIR" "$PYTHON" -m backend.app --host 0.0.0.0 --port "$PORT" >>"$LOGFILE" 2>&1 &
-        PID=$!; echo "$PID" > "$PIDFILE"; echo "python" > "$MODEFILE"; sleep 2
-        if kill -0 "$PID" 2>/dev/null; then log "Python backend started pid=$PID"; exit 0; fi
-        log "Python backend exited immediately; falling back to native diagnostic"; rm -f "$PIDFILE" "$MODEFILE"
-        start_native_diag "Python $PYVER was found at $PYTHON, but the backend exited during startup. See /tmp/${PKG}.log"; exit $?
-      fi
-      start_native_diag "Python $PYVER was found at $PYTHON, but this build requires Python 3.8 or newer"; exit $?
+    if [ -z "$PYTHON" ]; then
+      start_native_diag "No Python 3 executable was found. v0.1.1-0004 should contain runtime/bin/python3; the packaged runtime may be missing from this SPK."; exit $?
     fi
-    start_native_diag "No usable Python 3 executable was found in DSM or Synology Python3 package paths"; exit $?
+
+    if [ "$PYTHON" = "$TARGET/runtime/bin/python3" ]; then SOURCE="bundled"; else SOURCE="DSM/Synology"; fi
+    PYVER="$(python_version || true)"; [ -n "$PYVER" ] || PYVER="unknown"
+    log "Python candidate: source=$SOURCE path=$PYTHON version=$PYVER"
+    if ! python_self_test; then
+      start_native_diag "$SOURCE Python at $PYTHON failed the runtime self-test (Python >=3.8 plus sqlite3/http.server are required). See /tmp/${PKG}.log"; exit $?
+    fi
+    log "Python runtime self-test passed"
+
+    DATA_DIR="$(select_data_dir 2>/dev/null || true)"
+    if [ -z "$DATA_DIR" ]; then
+      start_native_diag "Python works, but no writable application-data directory could be created."; exit $?
+    fi
+    log "Application data directory: $DATA_DIR"
+    cd "$TARGET" || { start_native_diag "Cannot cd to package target: $TARGET"; exit $?; }
+
+    start_backend
+    PID="$BACKEND_PID"; echo "$PID" > "$PIDFILE"; echo "python" > "$MODEFILE"; sleep 2
+    if kill -0 "$PID" 2>/dev/null; then
+      log "Python backend started pid=$PID"
+      exit 0
+    fi
+    log "Python backend exited immediately; falling back to native diagnostic"
+    rm -f "$PIDFILE" "$MODEFILE"
+    start_native_diag "$SOURCE Python $PYVER passed its self-test, but the EXIF backend exited during startup. See /tmp/${PKG}.log"; exit $?
     ;;
   stop)
     if is_running; then
