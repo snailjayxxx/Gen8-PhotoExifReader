@@ -63,6 +63,7 @@ jobs:
               -Dprefix="$GITHUB_WORKSPACE/vendor/perl" \
               -Dcc=musl-gcc \
               -Dld=musl-gcc \
+              -Dlibs='-lpthread -ldl -lm -lutil -lc' \
               -Dldflags='-static' \
               -Uuseshrplib \
               -Uusedl \
