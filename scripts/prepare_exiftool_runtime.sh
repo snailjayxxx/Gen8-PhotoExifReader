@@ -7,11 +7,16 @@ cd "$ROOT"
 rm -rf vendor /tmp/exiftool-src /tmp/exiftool.tar.gz
 mkdir -p vendor/perl/bin vendor/perl/lib vendor/musl /tmp/exiftool-src
 
+HOST_UID="$(id -u)"
+HOST_GID="$(id -g)"
+
 # Do not compile Perl against a musl compatibility toolchain on the Ubuntu host.
 # Instead, take one coherent Perl + musl userspace from Alpine and relocate it
 # into the SPK. The wrapper below explicitly invokes the bundled musl loader,
 # so DSM 6.1 does not need a compatible system Perl, glibc or musl loader.
 docker run --rm \
+  -e HOST_UID="$HOST_UID" \
+  -e HOST_GID="$HOST_GID" \
   -v "$ROOT:/work" \
   alpine:3.21 \
   sh -euxc '
@@ -26,6 +31,10 @@ docker run --rm \
     cp -a /lib/. /work/vendor/musl/
     find /usr/lib -maxdepth 1 \( -type f -o -type l \) -name "*.so*" \
       -exec cp -a "{}" /work/vendor/musl/ \;
+
+    # Docker writes bind-mounted files as root by default. Return ownership to
+    # the GitHub Actions runner so the remaining build can chmod/package them.
+    chown -R "$HOST_UID:$HOST_GID" /work/vendor
   '
 
 chmod 755 vendor/perl/bin/perl
