@@ -73,8 +73,10 @@ PERL5LIB="$PERL5LIB_PATH" \
   "$ROOT/$LOADER" --library-path "$ROOT/vendor/musl" "$ROOT/vendor/perl/bin/perl" \
   -e 'use strict; use warnings; use Encode; use File::Basename; use File::Spec; use POSIX; print qq(bundled perl ok: $^V\n)'
 
+# Pin the latest production ExifTool release to CPAN. Development releases on
+# exiftool.org are rotated out and old direct URLs may return 404.
 curl -fL --retry 3 --retry-delay 2 \
-  https://exiftool.org/Image-ExifTool-13.59.tar.gz \
+  https://www.cpan.org/modules/by-module/File/EXIFTOOL/Image-ExifTool-13.55.tar.gz \
   -o /tmp/exiftool.tar.gz
 tar -xzf /tmp/exiftool.tar.gz -C /tmp/exiftool-src --strip-components=1
 mkdir -p vendor/exiftool
@@ -113,13 +115,13 @@ SH
 chmod 755 vendor/exiftool/exiftool
 
 cat > vendor/exiftool/RUNTIME_SOURCE.txt <<'EOF'
-ExifTool 13.59 from exiftool.org
+ExifTool 13.55 production release from CPAN
 Perl + musl userspace staged from Alpine 3.21
 The bundled musl loader is invoked explicitly; DSM system Perl/glibc is not required.
 EOF
 
 # CI/runtime smoke tests. These exercise XS modules as well as ExifTool itself.
-vendor/exiftool/exiftool -ver | grep -qx '13.59'
+vendor/exiftool/exiftool -ver | grep -qx '13.55'
 printf '\377\330\377\331' > /tmp/minimal.jpg
 vendor/exiftool/exiftool -json -n -SourceFile -FileType /tmp/minimal.jpg \
   | tee /tmp/exiftool-test.json
