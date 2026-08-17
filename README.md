@@ -4,7 +4,7 @@
 
 目标是直接读取现有照片库，不移动、不重命名、不修改原始照片，把**照片库根目录下的第一级文件夹作为摄影主题**，并将 RAW、机内 JPG 和 Lightroom/Photoshop 修图导出关联到同一次实际拍摄（Capture）。
 
-> 当前版本：`0.1.0`，属于可运行的技术初版 / SPK 骨架，不建议直接对唯一照片库执行任何写入操作。扫描器设计为只读原片，所有状态只写入独立 SQLite 数据库。
+> 当前开发版本：`0.1.1-0003`。DSM 最低版本目标为 6.1-14715。0003 增加 x86_64 原生诊断回退服务：即使 DSM 上没有可用 Python 3，套件也能保持运行并通过 9865 页面显示启动原因。
 
 ## 目前已经实现
 
@@ -22,9 +22,9 @@
 - 删除/移走文件以 `active=0` 软失效，不修改原文件。
 - SQLite WAL 索引数据库。
 - Web 总览：实际拍摄数、文件数、RAW、已修图 Capture、主题、器材、光圈、ISO、焦段、快门分布。
-- 最近索引文件列表。
-- Web 设置照片库和目录关键字。
-- DSM 6 x86_64 SPK 开发骨架与构建脚本。
+- DSM 6.1+ x86_64 SPK 构建脚本。
+- DSM 6 启动时自动检测套件内 Python、Synology Python3 套件路径和系统 Python。
+- Python 缺失/版本过低/后端启动失败时，自动切换到静态链接的原生诊断 Web 服务，避免套件持续显示“停用”。
 
 详细设计见 [`docs/DESIGN.md`](docs/DESIGN.md)。
 
@@ -47,79 +47,6 @@ cd Gen8-PhotoExifReader
 http://NAS_OR_HOST:9865
 ```
 
-第一次进入“设置”，例如填写：
-
-```text
-我的摄影库 | /volume1/photo
-```
-
-保存后点击“扫描照片库”。
-
-也可以指定独立数据目录：
-
-```bash
-PHOTOEXIF_DATA_DIR=/path/to/appdata ./scripts/dev_run.sh
-```
-
-## 目录示例
-
-```text
-/volume1/photo/
-├── 旅游/
-│   └── 2026名古屋/
-│       ├── 名古屋RAW/
-│       │   ├── DSC01234.ARW
-│       │   └── 修图/
-│       │       └── DSC01234-Edit.jpg
-│       └── jpg/
-│           └── DSC01234.JPG
-├── 散步/
-├── 拍娃/
-└── 拍猫/
-```
-
-系统会得到：
-
-```text
-主题：旅游
-Capture：DSC01234
-├── RAW        DSC01234.ARW
-├── Camera JPG DSC01234.JPG
-└── Edited     DSC01234-Edit.jpg
-```
-
-因此“实际拍摄”统计为 1，而“物理图片文件”统计为 3。
-
-## API
-
-```text
-GET  /api/health
-GET  /api/dashboard
-GET  /api/photos?limit=100&theme=旅游&role=raw
-GET  /api/settings
-POST /api/settings
-POST /api/scan
-GET  /api/scan/status
-```
-
-## 构建开发版 SPK
-
-```bash
-./scripts/build_spk.sh
-```
-
-输出：
-
-```text
-dist/Gen8-PhotoExifReader-0.1.0-x86_64.spk
-```
-
-### 当前 SPK 注意事项
-
-`0.1.0` 的 SPK 是开发骨架：当前会优先使用套件内 `runtime/bin/python3`，若不存在则寻找系统 `python3`；ExifTool 同理会优先寻找未来打包的 `vendor/exiftool/exiftool`，否则寻找系统 `exiftool`。
-
-正式发布版计划直接打包固定 Python Runtime 与 ExifTool，使群晖端无需手动安装开发依赖。
-
 ## 数据安全原则
 
 - 不移动照片。
@@ -129,6 +56,27 @@ dist/Gen8-PhotoExifReader-0.1.0-x86_64.spk
 - 不删除原始文件。
 - 数据库、日志和未来缩略图缓存在套件独立目录。
 
+## DSM 6.1+ SPK
+
+```bash
+python3 scripts/build_spk_dsm61.py
+```
+
+当前 0003 是 x86_64 启动诊断版。构建机需要 `gcc` 并支持 `-static`，用于把原生诊断服务编译成不依赖 DSM 用户空间动态库的单文件 ELF。
+
+套件启动顺序：
+
+1. 套件内 `runtime/bin/python3`
+2. Synology Python3 套件常见路径
+3. DSM 系统 Python3
+4. 若以上 Python 不存在、低于 3.8，或 Python 后端启动后立即退出，则自动启动 `native/diag-server`
+
+诊断日志写入：
+
+```text
+/tmp/Gen8PhotoExifReader.log
+```
+
 ## 测试
 
 ```bash
@@ -137,12 +85,11 @@ python3 -m unittest discover -s tests -v
 
 ## Roadmap
 
-下一步优先级：
-
-1. RAW 内嵌预览缩略图与缓存。
-2. Capture 详情页，明确显示 RAW / JPG / 修图三态。
-3. 主题 × 年份 × 相机 × 镜头 × 光圈 × 焦距 × 快门 × ISO 交叉筛选。
-4. 35mm 等效焦段切换。
-5. GPS 地图。
-6. Lightroom/XMP 星级与关键词统计。
-7. 定时扫描和正式 DSM 6/7 SPK 无依赖打包。
+1. 将固定 Python Runtime 与 ExifTool 正式封装进 x86_64 SPK。
+2. RAW 内嵌预览缩略图与缓存。
+3. Capture 详情页，明确显示 RAW / JPG / 修图三态。
+4. 主题 × 年份 × 相机 × 镜头 × 光圈 × 焦距 × 快门 × ISO 交叉筛选。
+5. 35mm 等效焦段切换。
+6. GPS 地图。
+7. Lightroom/XMP 星级与关键词统计。
+8. 定时扫描和 DSM 7 兼容。
