@@ -32,6 +32,12 @@ docker run --rm \
     find /usr/lib -maxdepth 1 \( -type f -o -type l \) -name "*.so*" \
       -exec cp -a "{}" /work/vendor/musl/ \;
 
+    # Alpine packages libperl beside Perl CORE instead of /usr/lib. Copy it
+    # into the same bundled library directory used by our explicit loader.
+    find /usr/lib/perl5 -type f -name "libperl.so*" \
+      -exec cp -a "{}" /work/vendor/musl/ \;
+    test -e /work/vendor/musl/libperl.so
+
     # Docker writes bind-mounted files as root by default. Return ownership to
     # the GitHub Actions runner so the remaining build can chmod/package them.
     chown -R "$HOST_UID:$HOST_GID" /work/vendor
