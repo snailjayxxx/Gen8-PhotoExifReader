@@ -22,6 +22,10 @@
     </header>
 
     <section id="dashboardPage" class="page active">
+      <section id="scanReport" class="panel scan-report" hidden>
+        <div class="report-head"><div><div class="report-title">最近一次扫描</div><div id="scanReportTime" class="report-meta"></div></div><button id="closeScanReport" class="ghost">收起</button></div>
+        <div id="scanReportBody"></div>
+      </section>
       <div class="cards">
         <article><span>实际拍摄</span><strong id="captureCount">0</strong><small>Capture，RAW/JPG/修图合并</small></article>
         <article><span>图片文件</span><strong id="fileCount">0</strong><small>NAS 上实际索引文件</small></article>
@@ -49,9 +53,10 @@
 
     <section id="settingsPage" class="page">
       <div class="panel wide settings-panel">
-        <div class="panel-title"><div><h2>照片库</h2><span>每行：名称 | NAS绝对路径</span></div><button id="saveSettings" class="primary">保存设置</button></div>
+        <div class="panel-title"><div><h2>照片库根目录</h2><span>每行：名称 | NAS绝对路径</span></div><button id="saveSettings" class="primary">保存设置</button></div>
         <textarea id="librariesInput" rows="7" placeholder="我的摄影库 | /volume1/photo"></textarea>
-        <p class="tip">顶层文件夹会自动作为摄影主题。示例：/volume1/photo/旅游、/volume1/photo/散步、/volume1/photo/拍娃。</p>
+        <p class="tip"><strong>会自动递归扫描根目录下的全部子文件夹</strong>，无需把 RAW、JPG、年份、地点等子目录逐个添加。根目录下第一级文件夹自动作为摄影主题。</p>
+        <p id="runtimeStatus" class="runtime-line">正在检查 EXIF 运行环境…</p>
         <hr>
         <label>修图目录关键字</label><input id="editedKeywords" type="text" placeholder="修图, 成片, edited, Lightroom, LR">
         <label>机内 JPG 目录关键字</label><input id="jpegKeywords" type="text" placeholder="jpg, jpeg, 直出">

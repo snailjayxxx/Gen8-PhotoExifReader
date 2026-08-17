@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Build the self-contained DSM 6.1+ x86_64 SPK using strict USTAR archives.
 
-v0.1.1-0004 requires a prepared portable Python runtime at runtime/bin/python3.
-The GitHub Actions build downloads a pinned x86_64 musl CPython distribution,
-validates sqlite3/stdlib support, and then invokes this builder.
+v0.1.1-0005 requires both a prepared portable Python runtime and a bundled
+ExifTool stack under vendor/. GitHub Actions prepares and validates both before
+invoking this builder.
 """
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = "0.1.1-0004"
+VERSION = "0.1.1-0005"
 
 
 def add_ustar(tf: tarfile.TarFile, path: Path, arcname: str) -> None:
@@ -59,10 +59,14 @@ def main() -> None:
     output.parent.mkdir(parents=True, exist_ok=True)
 
     runtime_python = ROOT / "runtime" / "bin" / "python3"
+    bundled_exiftool = ROOT / "vendor" / "exiftool" / "exiftool"
+    bundled_perl = ROOT / "vendor" / "perl" / "bin" / "perl"
     if not runtime_python.exists():
-        raise SystemExit(
-            "Bundled runtime is required for v0.1.1-0004: runtime/bin/python3 was not found"
-        )
+        raise SystemExit("Bundled Python runtime is required: runtime/bin/python3 was not found")
+    if not bundled_exiftool.exists():
+        raise SystemExit("Bundled ExifTool is required: vendor/exiftool/exiftool was not found")
+    if not bundled_perl.exists():
+        raise SystemExit("Bundled Perl runtime is required: vendor/perl/bin/perl was not found")
 
     with tempfile.TemporaryDirectory(prefix="photoexif-spk-") as tmp:
         work = Path(tmp)

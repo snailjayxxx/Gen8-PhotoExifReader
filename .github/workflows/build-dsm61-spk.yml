@@ -11,10 +11,17 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-22.04
-    timeout-minutes: 20
+    timeout-minutes: 40
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Install build tools
+        shell: bash
+        run: |
+          set -euxo pipefail
+          sudo apt-get update
+          sudo apt-get install -y zstd musl-tools build-essential
 
       - name: Prepare static bundled CPython 3.10 runtime
         shell: bash
@@ -22,96 +29,176 @@ jobs:
           set -euxo pipefail
           rm -rf runtime /tmp/python-standalone
           mkdir -p /tmp/python-standalone
-
-          # Baseline x86_64 + musl + static build: no host glibc/musl loader is required.
           URL='https://github.com/astral-sh/python-build-standalone/releases/download/20260718/cpython-3.10.20%2B20260718-x86_64-unknown-linux-musl-noopt%2Bstatic-full.tar.zst'
           curl -fL --retry 3 --retry-delay 2 -o /tmp/python-runtime.tar.zst "$URL"
-
-          sudo apt-get update
-          sudo apt-get install -y zstd
           tar --zstd -xf /tmp/python-runtime.tar.zst -C /tmp/python-standalone
-
           test -x /tmp/python-standalone/python/install/bin/python3
           mv /tmp/python-standalone/python/install runtime
-
           file runtime/bin/python3
           ldd runtime/bin/python3 || true
           PYTHONHOME="$PWD/runtime" PYTHONNOUSERSITE=1 runtime/bin/python3 --version
           PYTHONHOME="$PWD/runtime" PYTHONNOUSERSITE=1 runtime/bin/python3 - <<'PY'
-          import http.server
-          import json
-          import os
-          import sqlite3
-          import subprocess
-          import sys
-          import threading
+          import http.server, json, sqlite3, subprocess, sys, threading
           conn = sqlite3.connect(':memory:')
           assert conn.execute('select 1').fetchone() == (1,)
           conn.close()
           print('runtime self-test:', sys.version, sqlite3.sqlite_version)
           PY
+          rm -rf runtime/lib/python3.10/test runtime/lib/python3.10/idlelib runtime/lib/python3.10/tkinter runtime/lib/python3.10/turtledemo runtime/lib/python3.10/ensurepip runtime/share runtime/include || true
+          printf '%s\n' 'python-build-standalone 20260718' 'CPython 3.10.20' 'x86_64-unknown-linux-musl-noopt+static-full' > runtime/RUNTIME_SOURCE.txt
 
-          # Keep the runtime conservative for this first NAS build. Remove only obvious
-          # developer/demo material after the required stdlib modules have passed.
-          rm -rf \
-            runtime/lib/python3.10/test \
-            runtime/lib/python3.10/idlelib \
-            runtime/lib/python3.10/tkinter \
-            runtime/lib/python3.10/turtledemo \
-            runtime/lib/python3.10/ensurepip \
-            runtime/share \
-            runtime/include || true
+      - name: Build static Perl and bundle ExifTool
+        shell: bash
+        run: |
+          set -euxo pipefail
+          rm -rf vendor /tmp/perl-src /tmp/exiftool-src
+          mkdir -p vendor /tmp/perl-src /tmp/exiftool-src
 
-          printf '%s\n' \
-            'python-build-standalone 20260718' \
-            'CPython 3.10.20' \
-            'x86_64-unknown-linux-musl-noopt+static-full' > runtime/RUNTIME_SOURCE.txt
+          curl -fL --retry 3 --retry-delay 2 https://www.cpan.org/src/5.0/perl-5.44.0.tar.gz -o /tmp/perl.tar.gz
+          tar -xzf /tmp/perl.tar.gz -C /tmp/perl-src --strip-components=1
+          STATIC_EXT='attributes B Cwd Data/Dumper Devel/Peek Digest/MD5 Digest/SHA Encode Fcntl File/Glob Hash/Util I18N/Langinfo IO List/Util MIME/Base64 mro Opcode PerlIO/encoding PerlIO/scalar PerlIO/via POSIX re SDBM_File Socket Storable Sys/Hostname Tie/Hash/NamedCapture Time/HiRes Time/Piece Unicode/Normalize'
+          (
+            cd /tmp/perl-src
+            ./Configure -des \
+              -Dprefix="$GITHUB_WORKSPACE/vendor/perl" \
+              -Dcc=musl-gcc \
+              -Dld=musl-gcc \
+              -Dldflags='-static' \
+              -Uuseshrplib \
+              -Uusedl \
+              -Dstatic_ext="$STATIC_EXT" \
+              -Dman1dir=none \
+              -Dman3dir=none
+            make -j2
+            make install
+          )
+          test -x vendor/perl/bin/perl
+          file vendor/perl/bin/perl
+          ldd vendor/perl/bin/perl || true
+          vendor/perl/bin/perl -e 'use Encode; use File::Basename; use File::Spec; use POSIX; print qq(static perl ok\n)'
 
-      - name: Restore DSM package icons
+          curl -fL --retry 3 --retry-delay 2 https://exiftool.org/Image-ExifTool-13.59.tar.gz -o /tmp/exiftool.tar.gz
+          tar -xzf /tmp/exiftool.tar.gz -C /tmp/exiftool-src --strip-components=1
+          mkdir -p vendor/exiftool
+          cp /tmp/exiftool-src/exiftool vendor/exiftool/exiftool.pl
+          cp -a /tmp/exiftool-src/lib vendor/exiftool/lib
+          cat > vendor/exiftool/exiftool <<'SH'
+          #!/bin/sh
+          HERE="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+          PERL_ROOT="$HERE/../perl"
+          PERL5LIB="$HERE/lib:$PERL_ROOT/lib/5.44.0"
+          for d in "$PERL_ROOT"/lib/5.44.0/*linux*; do
+            [ -d "$d" ] && PERL5LIB="$PERL5LIB:$d"
+          done
+          export PERL5LIB
+          exec "$PERL_ROOT/bin/perl" "$HERE/exiftool.pl" "$@"
+          SH
+          chmod 755 vendor/exiftool/exiftool
+          printf '%s\n' 'ExifTool 13.59 from exiftool.org' 'Perl 5.44.0 static musl runtime' > vendor/exiftool/RUNTIME_SOURCE.txt
+          vendor/exiftool/exiftool -ver
+          printf '\377\330\377\331' > /tmp/minimal.jpg
+          vendor/exiftool/exiftool -json -n -SourceFile -FileType /tmp/minimal.jpg | tee /tmp/exiftool-test.json
+          grep -q 'SourceFile' /tmp/exiftool-test.json
+
+      - name: Generate DSM package icons
         shell: bash
         run: |
           set -euo pipefail
-          printf '%s' 'iVBORw0KGgoAAAANSUhEUgAAAEgAAABICAYAAABV7bNHAAACgElEQVR4nO2csVXEMAxAdTx6WlggqW4IRqBmA0oGoWQDakZgiKvuJmALqAwi2JZlS3Li6Fc8jvisf5IdG18ON3fTFzhJrnp3YO24IAIXROCCCK5bG7h9Pkv0Q5XPl7n62kPNLLYFKSm4stgltmU5APz+F2fQ1sXEKMmmogwaUQ5AWVykoFHlBKj4fJonyAoaPXsCuTiTgvYiJ5CK10uMwAURRAXtrbwCsbib12ISfDylX7t/tetHjFUIyoHl9ZC1CkHzdEy+dr6cfn4OsixFrUJQDiwvyLIUpS4Il0guU0oI12NR2pJUp3lJORjcVm6Al0BNUOj4PB1F5QRwu5qSVARhOdpoSxIXpJ3y1u+tNkhzsufx/RT9/dtDWRvzdPxzOyBJdMu1dqnBLa2UmCWlooKklpltuQ3bbbFaKof7t9KICeJkT03AJddoDNjmGdSSDT0yyVSQRIDWkkQEWd73UEiXmVkGSX7yllnkW64ELojABRG4IAIXRGAmqHQ9Zd0WhYigsDjUWlFzkFiwYkxLTOKTt8wegA5jUEuA1nIABAVxyqwm0JJrpMsLoOMsxpHUI3MCojuKAHUL19YtVwC57FnuKKrtSZ8vp2JJrRmiOXuKl1jP0xga760yBlneF2kMzBi1QRpL0hCF29XMWtVZDHdcUhJua9OHFwD+S2oRtbx+iOMvAL+BhFsAHCQ108WEDnuAaikKgFd6uzmChwOl/vuw+0OcvQVQ+I4iQVRQy3c8t0wsbs8gAhdEkBS0tzJLxZvNoL1IysXpJUZACho9i6j4ijJoVEklcbEfTTHCl+04Hzh7DNp6NnH7X/VwE8wWMsr86S97wqd5AhdE4IIIvgE/euz9VE6B4wAAAABJRU5ErkJggg==' | base64 -d > spk/PACKAGE_ICON.PNG
-          printf '%s' 'iVBORw0KGgoAAAANSUhEUgAAAQAAAAEACAYAAABccqhmAAAJuUlEQVR4nO3dvXUb1xaAUfAt5UzJBsBIRagEx+5AIQthqA4cuwQV4YiqgF3QgY0nGAI4f/fn3Dl7r/UiWzBmMOebM+AS39394/H9AKT0v95vAOhHACAxAYDEBAASEwBITAAgMQGAxAQAEhMASEwAIDEBgMQEABITAEhMACAxAYDEBAASEwBI7FPvN9DLw/Nr77dAMG8vT73fQnN3GX4lmGFnrb1HYbcBMPSUtscY7CoAhp5W9hKDXQTA4NPL6CEYNgCGnmhGjMGQPwY0/EQ04nU51AYw4gkmp1G2gSECYPAZVfQQhH8EMPyMLPr1GzoA0U8ezBH5Og75CBD5hMEW0R4Jwm0Ahp89i3Z9hwpAtJMDNUS6zsMEINJJgdqiXO8hAhDlZEBLEa777gGIcBKgl97Xf9cA9D54iKDnHHQLgOGHn3rNQ5cAGH74VY+56P4dANBP8wC4+8NtreejaQAMP0xrOSfNAmD4Yb5W8+I7AEisSQDc/WG5FnNjA4DEqgfA3R/Wqz0/VQNg+GG7mnPkEQASEwBIrFoArP9QTq15sgFAYlUC4O4P5dWYKxsAJCYAkFjxAFj/oZ7S82UDgMQMASKxKADwGQHk15soGAIlVC4AtAMqpNU82AEhMACCxqgHwGADb1Zyj6huACMB6tefHIwAk1iQAtgBYrsXc2AAgsWYBsAXAfK3mpekGIAIwreWcNH8EEAG4rfV8+A4AEusSAFsA/KrHXHTbEQAfuo1D10fAUQA+s5B9+8ARIDMel//3QNwOPQ/CdBDhOs+RAAOhxgnA1qJcr2HCcDhEOekQE2RrvNQATgcYp0cKC3a9X13/3h87/0mbnl4fu39FqCIaIN/Em4DOBf1pMESka/j0AE4HGKfPJgS/foN/QhwySMBo4g++CdDBeBECIhqlME/Cf8IcM1oJ5kcRrwuh9wALtkI6GXEoT+3iwCcCAGtjD74J7sKwDkxoLS9DP253QbgnBiw1h6H/lyKAFwjClza+7BfkzYAwKA/BgTKEABITAAgMQGAxAQAEhMASEwAIDEBgMQEABITAEhMACAxAYDEBAASEwBITAAgMQGAxP4GwiETnEgSz8sAAAAASUVORK5CYII=' | base64 -d > spk/PACKAGE_ICON_256.PNG
+          python3 - <<'PY'
+          import struct, zlib
+          from pathlib import Path
+          def chunk(kind, data):
+              return struct.pack('>I', len(data)) + kind + data + struct.pack('>I', zlib.crc32(kind + data) & 0xffffffff)
+          def make(path, size):
+              rows=[]
+              cx=cy=(size-1)/2
+              r=size*0.24
+              for y in range(size):
+                  row=bytearray([0])
+                  for x in range(size):
+                      d=((x-cx)**2+(y-cy)**2)**0.5
+                      if d < r: rgba=(240,181,90,255)
+                      elif d < r+max(1,size*0.018): rgba=(116,94,59,255)
+                      else: rgba=(18,23,32,255)
+                      row.extend(rgba)
+                  rows.append(bytes(row))
+              raw=b''.join(rows)
+              png=b'\x89PNG\r\n\x1a\n'+chunk(b'IHDR',struct.pack('>IIBBBBB',size,size,8,6,0,0,0))+chunk(b'IDAT',zlib.compress(raw,9))+chunk(b'IEND',b'')
+              Path(path).write_bytes(png)
+          make('spk/PACKAGE_ICON.PNG',72)
+          make('spk/PACKAGE_ICON_256.PNG',256)
+          PY
           file spk/PACKAGE_ICON.PNG spk/PACKAGE_ICON_256.PNG
 
       - name: Build SPK
         run: python3 scripts/build_spk_dsm61.py
 
-      - name: Validate package and Python backend
+      - name: Validate complete SPK and end-to-end scan
         shell: bash
         run: |
           set -euxo pipefail
-          SPK='dist/Gen8-PhotoExifReader-0.1.1-0004-DSM6.1-x86_64.spk'
+          SPK='dist/Gen8-PhotoExifReader-0.1.1-0005-DSM6.1-x86_64.spk'
           test -s "$SPK"
           rm -rf /tmp/spk-verify
-          mkdir -p /tmp/spk-verify/root /tmp/spk-verify/payload /tmp/spk-verify/data
+          mkdir -p /tmp/spk-verify/root /tmp/spk-verify/payload /tmp/spk-verify/data /tmp/spk-verify/library
           tar -xf "$SPK" -C /tmp/spk-verify/root
-          grep 'version="0.1.1-0004"' /tmp/spk-verify/root/INFO
+          grep 'version="0.1.1-0005"' /tmp/spk-verify/root/INFO
           tar -xzf /tmp/spk-verify/root/package.tgz -C /tmp/spk-verify/payload
           test -x /tmp/spk-verify/payload/runtime/bin/python3
+          test -x /tmp/spk-verify/payload/vendor/perl/bin/perl
+          test -x /tmp/spk-verify/payload/vendor/exiftool/exiftool
           test -x /tmp/spk-verify/payload/native/diag-server
-          file /tmp/spk-verify/payload/runtime/bin/python3
           ldd /tmp/spk-verify/payload/runtime/bin/python3 || true
-          PYTHONHOME=/tmp/spk-verify/payload/runtime PYTHONNOUSERSITE=1 /tmp/spk-verify/payload/runtime/bin/python3 -c 'import sqlite3, http.server; assert sqlite3.connect(":memory:").execute("select 1").fetchone() == (1,)'
+          ldd /tmp/spk-verify/payload/vendor/perl/bin/perl || true
+          /tmp/spk-verify/payload/vendor/exiftool/exiftool -ver | grep -q '13.59'
+          printf '\377\330\377\331' > /tmp/spk-verify/library/test.jpg
+          cat > /tmp/spk-verify/data/config.json <<JSON
+          {
+            "libraries": [{"name": "CI", "path": "/tmp/spk-verify/library", "enabled": true}],
+            "raw_extensions": [".arw", ".cr2", ".cr3", ".nef", ".nrw", ".raf", ".orf", ".rw2", ".dng", ".pef", ".srw"],
+            "image_extensions": [".jpg", ".jpeg", ".heic", ".heif", ".tif", ".tiff"],
+            "edited_dir_keywords": ["修图", "edited"],
+            "jpeg_dir_keywords": ["jpg", "jpeg", "直出"],
+            "raw_dir_keywords": ["raw", "原片"],
+            "edited_filename_suffixes": ["-edit", "_edit", "-修图", "_修图"],
+            "scan_batch_size": 64
+          }
+          JSON
           (
             cd /tmp/spk-verify/payload
-            PHOTOEXIF_DATA_DIR=/tmp/spk-verify/data \
-            PYTHONHOME=/tmp/spk-verify/payload/runtime \
-            PYTHONNOUSERSITE=1 \
-            PYTHONUNBUFFERED=1 \
-            /tmp/spk-verify/payload/runtime/bin/python3 -m backend.app --host 127.0.0.1 --port 19865 \
-              >/tmp/spk-verify/backend.log 2>&1 &
+            PHOTOEXIF_DATA_DIR=/tmp/spk-verify/data PYTHONHOME=/tmp/spk-verify/payload/runtime PYTHONNOUSERSITE=1 PYTHONUNBUFFERED=1 \
+              /tmp/spk-verify/payload/runtime/bin/python3 -m backend.app --host 127.0.0.1 --port 19865 >/tmp/spk-verify/backend.log 2>&1 &
             echo $! >/tmp/spk-verify/backend.pid
           )
           sleep 2
           python3 - <<'PY'
-          import json
-          import urllib.request
-          with urllib.request.urlopen('http://127.0.0.1:19865/api/health', timeout=5) as r:
-              data = json.load(r)
-          assert data == {'ok': True, 'version': '0.1.1-0004', 'mode': 'python'}, data
-          print(data)
+          import json, time, urllib.request
+          def get(path):
+              with urllib.request.urlopen('http://127.0.0.1:19865'+path, timeout=10) as r: return json.load(r)
+          def post(path):
+              req=urllib.request.Request('http://127.0.0.1:19865'+path,data=b'{}',headers={'Content-Type':'application/json'},method='POST')
+              with urllib.request.urlopen(req,timeout=10) as r: return json.load(r)
+          health=get('/api/health')
+          assert health == {'ok': True, 'version': '0.1.1-0005', 'mode': 'python'}, health
+          runtime=get('/api/runtime')
+          assert runtime['exiftool']['ok'] is True, runtime
+          assert runtime['exiftool']['version'] == '13.59', runtime
+          post('/api/scan')
+          for _ in range(30):
+              state=get('/api/scan/status')
+              if not state['running']: break
+              time.sleep(.2)
+          else: raise AssertionError('scan did not finish')
+          lib=state['last_result']['libraries'][0]
+          assert lib['recursive'] is True, lib
+          assert lib['discovered'] == 1, lib
+          assert lib['indexed'] == 1, lib
+          assert lib['errors'] == 0, lib
+          dash=get('/api/dashboard')
+          assert dash['file_count'] == 1, dash
+          print('health:', health)
+          print('runtime:', runtime)
+          print('scan:', lib)
           PY
           kill "$(cat /tmp/spk-verify/backend.pid)"
           sha256sum "$SPK" | tee dist/SHA256SUMS.txt
@@ -120,9 +207,9 @@ jobs:
       - name: Upload SPK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Gen8-PhotoExifReader-0.1.1-0004
+          name: Gen8-PhotoExifReader-0.1.1-0005
           path: |
-            dist/Gen8-PhotoExifReader-0.1.1-0004-DSM6.1-x86_64.spk
+            dist/Gen8-PhotoExifReader-0.1.1-0005-DSM6.1-x86_64.spk
             dist/SHA256SUMS.txt
           if-no-files-found: error
           compression-level: 0

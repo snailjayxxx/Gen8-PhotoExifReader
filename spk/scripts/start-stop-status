@@ -74,7 +74,7 @@ case "${1:-}" in
     [ "${PHOTOEXIF_FORCE_NATIVE_DIAG:-0}" = "1" ] && { start_native_diag "Forced native diagnostic mode"; exit $?; }
     PYTHON="$(find_python 2>/dev/null || true)"
     if [ -z "$PYTHON" ]; then
-      start_native_diag "No Python 3 executable was found. v0.1.1-0004 should contain runtime/bin/python3; the packaged runtime may be missing from this SPK."; exit $?
+      start_native_diag "No Python 3 executable was found. v0.1.1-0005 should contain runtime/bin/python3; the packaged runtime may be missing from this SPK."; exit $?
     fi
 
     if [ "$PYTHON" = "$TARGET/runtime/bin/python3" ]; then SOURCE="bundled"; else SOURCE="DSM/Synology"; fi

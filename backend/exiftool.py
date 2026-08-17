@@ -20,12 +20,33 @@ def find_exiftool() -> str:
     if override and Path(override).exists():
         return override
     packaged = Path(__file__).resolve().parents[1] / "vendor" / "exiftool" / "exiftool"
-    if packaged.exists():
+    if packaged.exists() and os.access(packaged, os.X_OK):
         return str(packaged)
     found = shutil.which("exiftool")
     if found:
         return found
-    raise RuntimeError("ExifTool not found. Install it or set PHOTOEXIF_EXIFTOOL.")
+    raise RuntimeError("ExifTool not found. The SPK should bundle ExifTool; reinstall the latest package or set PHOTOEXIF_EXIFTOOL.")
+
+
+def probe_exiftool(timeout: int = 10) -> dict[str, str]:
+    executable = find_exiftool()
+    try:
+        result = subprocess.run(
+            [executable, "-ver"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+            timeout=timeout,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise RuntimeError(f"ExifTool cannot be executed: {exc}") from exc
+    if result.returncode != 0:
+        message = result.stderr.decode("utf-8", errors="replace").strip() or f"exit code {result.returncode}"
+        raise RuntimeError(f"ExifTool self-test failed: {message}")
+    version = result.stdout.decode("utf-8", errors="replace").strip()
+    if not version:
+        raise RuntimeError("ExifTool self-test returned an empty version string")
+    return {"path": executable, "version": version}
 
 
 def read_metadata(paths: Iterable[Path]) -> list[dict]:
@@ -33,7 +54,10 @@ def read_metadata(paths: Iterable[Path]) -> list[dict]:
     if not items:
         return []
     cmd = [find_exiftool(), "-json", "-n", "-charset", "filename=UTF8", *TAGS, *items]
-    result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
+    try:
+        result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False, timeout=300)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise RuntimeError(f"ExifTool execution failed: {exc}") from exc
     if result.returncode not in (0, 1):
         raise RuntimeError(result.stderr.decode("utf-8", errors="replace").strip() or "ExifTool failed")
     try:
