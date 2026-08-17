@@ -38,8 +38,8 @@ static void html_escape(const char *src, char *dst, size_t cap) {
 
 int main(int argc, char **argv) {
     int port = argc > 1 ? atoi(argv[1]) : 9865;
-    const char *raw_reason = argc > 2 ? argv[2] : "Python runtime unavailable";
-    char reason[512];
+    const char *raw_reason = argc > 2 ? argv[2] : "Bundled Python runtime unavailable";
+    char reason[768];
     html_escape(raw_reason, reason, sizeof(reason));
 
     int s = socket(AF_INET, SOCK_STREAM, 0);
@@ -72,16 +72,16 @@ int main(int argc, char **argv) {
         char body[12288];
         if (health) {
             snprintf(body, sizeof(body),
-                "{\"ok\":true,\"version\":\"0.1.1-0003\",\"mode\":\"native-diagnostic\",\"machine\":\"%s\"}", u.machine);
+                "{\"ok\":true,\"version\":\"0.1.1-0004\",\"mode\":\"native-diagnostic\",\"machine\":\"%s\"}", u.machine);
         } else {
             snprintf(body, sizeof(body),
                 "<!doctype html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>摄影 EXIF 档案</title>"
                 "<style>body{font-family:-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;background:#f4f7fb;color:#172033;margin:0}.wrap{max-width:820px;margin:48px auto;padding:24px}.card{background:#fff;border-radius:16px;padding:28px;box-shadow:0 8px 30px rgba(0,0,0,.08)}.ok{color:#16803c;font-weight:700}.warn{color:#a45b00}.mono{font-family:monospace;background:#f3f5f8;padding:2px 6px;border-radius:6px}.reason{padding:14px;background:#fff7e8;border-radius:10px}</style></head>"
                 "<body><div class=\"wrap\"><div class=\"card\"><h1>摄影 EXIF 档案</h1><p class=\"ok\">✓ DSM 套件服务已经成功启动</p>"
-                "<p>当前运行的是 <b>v0.1.1-0003 原生诊断模式</b>。这证明 SPK 安装、启动脚本、服务状态与 9865 端口链路正常。</p>"
-                "<p class=\"reason\"><b>Python 后端未启动的原因：</b><br>%s</p>"
+                "<p>当前运行的是 <b>v0.1.1-0004 原生诊断模式</b>。0004 已把 Python Runtime 封装进 SPK；如果仍进入此页面，下面会显示内置 Runtime 或后端启动失败的具体原因。</p>"
+                "<p class=\"reason\"><b>完整 Python 后端未启动的原因：</b><br>%s</p>"
                 "<p>系统：<span class=\"mono\">%s %s</span> 架构：<span class=\"mono\">%s</span></p>"
-                "<p class=\"warn\">请把这个页面截图发回，我就能针对实际运行时继续制作完整 EXIF 版。</p></div></div></body></html>",
+                "<p class=\"warn\\\">请把这个页面截图发回，我会继续针对这台 DSM 6.1+ Gen8 的实际兼容性修正。</p></div></div></body></html>",
                 reason, u.sysname, u.release, u.machine);
         }
         const char *ct = health ? "application/json" : "text/html";
