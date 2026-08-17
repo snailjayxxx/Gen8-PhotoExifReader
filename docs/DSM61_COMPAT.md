@@ -1,23 +1,35 @@
-# DSM 6.1 compatibility
+# DSM 6.1+ 兼容策略
 
-Gen8 Photo EXIF Reader targets DSM 6.1 and later within the DSM 6.x package line.
+Gen8 Photo EXIF Reader 的最低 DSM 目标为 **6.1-14715**。
 
-## Minimum version
+## SPK 格式
 
-- Minimum DSM: `6.1-14715`
-- Installation-validation SPK architecture: `noarch`
+- 外层 `.spk` 使用 POSIX USTAR，不使用 GNU/PAX 扩展。
+- 内层 `package.tgz` 使用 gzip + USTAR。
+- DSM 6.1+ x86_64 测试包使用 `arch="x86_64"`。
 
-The current validation build contains scripts and web assets only, so `noarch` is used to maximize compatibility during package-format testing. A later build that bundles native Python/ExifTool runtime files may switch back to an architecture-specific package where necessary.
+## v0.1.1-0003 启动诊断
 
-## Packaging compatibility rules
+0002 在 DSM 上安装成功但可能一直显示“停用”。根因之一是启动脚本找不到 Python 3 时没有启动任何常驻进程；DSM 随后的 status 检查因此返回未运行。
 
-For DSM 6.1 compatibility the SPK builder should:
+0003 调整为：
 
-- write the outer `.spk` as a plain USTAR tar archive;
-- write `package.tgz` as gzip-compressed USTAR;
-- keep the `INFO` file limited to fields available on DSM 6.1;
-- use `os_min_ver="6.1-14715"`;
-- avoid declaring a DSM 6.2-only minimum version;
-- retain the low-privilege package execution model.
+1. 搜索套件内 `runtime/bin/python3`。
+2. 搜索 Synology Python3 套件常见路径。
+3. 搜索 DSM 系统 Python3。
+4. Python 低于 3.8、找不到 Python，或者 Python 后端启动后立即退出时，自动启动套件内静态链接的 x86_64 `native/diag-server`。
+5. PID / 启动日志使用 `/tmp/Gen8PhotoExifReader.*`，减少 DSM 6 package 用户对套件目录写权限差异造成的干扰。
 
-The first purpose of the `0.1.1-0002` build is to verify that DSM can parse and install the package before native runtime dependencies are bundled.
+诊断页面监听：
+
+```text
+http://NAS_IP:9865/
+```
+
+诊断日志：
+
+```text
+/tmp/Gen8PhotoExifReader.log
+```
+
+该原生诊断程序只负责验证 DSM 的 SPK 生命周期、进程状态和 9865 端口，不读取或修改任何照片。
