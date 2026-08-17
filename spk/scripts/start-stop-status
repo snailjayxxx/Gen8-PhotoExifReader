@@ -1,47 +1,70 @@
 #!/bin/sh
-set -eu
-
-PKG_DEST="${SYNOPKG_PKGDEST:-/var/packages/photoexifreader/target}"
-PKG_NAME="${SYNOPKG_PKGNAME:-photoexifreader}"
-VAR_DIR="${SYNOPKG_PKGVAR:-/var/packages/${PKG_NAME}/var}"
-PID_FILE="${VAR_DIR}/photoexifreader.pid"
-LOG_FILE="${VAR_DIR}/photoexifreader.log"
+PKG="Gen8PhotoExifReader"
+TARGET="${SYNOPKG_PKGDEST:-/var/packages/$PKG/target}"
+PIDFILE="/tmp/${PKG}.pid"
+LOGFILE="/tmp/${PKG}.log"
+MODEFILE="/tmp/${PKG}.mode"
 PORT="9865"
 
+log() { echo "$(date '+%Y-%m-%d %H:%M:%S') $*" >> "$LOGFILE"; }
+is_running() {
+  [ -f "$PIDFILE" ] || return 1
+  PID="$(cat "$PIDFILE" 2>/dev/null)"
+  [ -n "$PID" ] && kill -0 "$PID" 2>/dev/null
+}
 find_python() {
-  if [ -x "${PKG_DEST}/runtime/bin/python3" ]; then echo "${PKG_DEST}/runtime/bin/python3"; return; fi
-  command -v python3 2>/dev/null || true
+  for p in "$TARGET/runtime/bin/python3" "/var/packages/Python3/target/usr/local/bin/python3" "/var/packages/Python3/target/bin/python3" "/usr/local/bin/python3" "/usr/bin/python3"; do
+    [ -x "$p" ] && { echo "$p"; return 0; }
+  done
+  return 1
+}
+python_is_usable() { "$1" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3,8) else 1)' >/dev/null 2>&1; }
+start_native_diag() {
+  REASON="$1"; NATIVE="$TARGET/native/diag-server"
+  [ -x "$NATIVE" ] || { log "FATAL: native diagnostic server missing: $NATIVE"; return 1; }
+  log "Starting native diagnostic fallback: $REASON"
+  "$NATIVE" "$PORT" "$REASON" >>"$LOGFILE" 2>&1 &
+  PID=$!; echo "$PID" > "$PIDFILE"; echo "native-diagnostic" > "$MODEFILE"; sleep 1
+  kill -0 "$PID" 2>/dev/null && { log "Native diagnostic server started pid=$PID"; return 0; }
+  log "FATAL: native diagnostic server exited immediately"; rm -f "$PIDFILE" "$MODEFILE"; return 1
 }
 
-start_pkg() {
-  mkdir -p "${VAR_DIR}"
-  if [ -f "${PID_FILE}" ] && kill -0 "$(cat "${PID_FILE}")" 2>/dev/null; then return 0; fi
-  PYTHON="$(find_python)"
-  [ -n "${PYTHON}" ] || { echo "python3 not found" >>"${LOG_FILE}"; return 1; }
-  cd "${PKG_DEST}"
-  PHOTOEXIF_DATA_DIR="${VAR_DIR}" nohup "${PYTHON}" -m backend.app --host 0.0.0.0 --port "${PORT}" >>"${LOG_FILE}" 2>&1 &
-  echo $! >"${PID_FILE}"
-}
-
-stop_pkg() {
-  if [ -f "${PID_FILE}" ]; then
-    PID="$(cat "${PID_FILE}")"
-    kill "${PID}" 2>/dev/null || true
-    i=0
-    while kill -0 "${PID}" 2>/dev/null && [ "$i" -lt 20 ]; do sleep 1; i=$((i+1)); done
-    kill -9 "${PID}" 2>/dev/null || true
-    rm -f "${PID_FILE}"
-  fi
-}
-
-status_pkg() {
-  [ -f "${PID_FILE}" ] && kill -0 "$(cat "${PID_FILE}")" 2>/dev/null
-}
-
-case "${1:-}" in
-  start) start_pkg ;;
-  stop) stop_pkg ;;
-  restart) stop_pkg; start_pkg ;;
-  status) status_pkg ;;
-  *) exit 1 ;;
+case "$1" in
+  start)
+    : > "$LOGFILE"
+    is_running && exit 0
+    rm -f "$PIDFILE" "$MODEFILE"
+    log "Start requested; target=$TARGET"
+    [ "${PHOTOEXIF_FORCE_NATIVE_DIAG:-0}" = "1" ] && { start_native_diag "Forced native diagnostic mode"; exit $?; }
+    PYTHON="$(find_python 2>/dev/null || true)"
+    if [ -n "$PYTHON" ]; then
+      PYVER="$($PYTHON -c 'import sys; print("%d.%d.%d" % sys.version_info[:3])' 2>/dev/null || echo unknown)"
+      log "Python candidate: $PYTHON version=$PYVER"
+      if python_is_usable "$PYTHON"; then
+        DATA_DIR="$TARGET/var"; mkdir -p "$DATA_DIR" 2>>"$LOGFILE" || true
+        cd "$TARGET" || { start_native_diag "Cannot cd to package target: $TARGET"; exit $?; }
+        PHOTOEXIF_DATA_DIR="$DATA_DIR" "$PYTHON" -m backend.app --host 0.0.0.0 --port "$PORT" >>"$LOGFILE" 2>&1 &
+        PID=$!; echo "$PID" > "$PIDFILE"; echo "python" > "$MODEFILE"; sleep 2
+        if kill -0 "$PID" 2>/dev/null; then log "Python backend started pid=$PID"; exit 0; fi
+        log "Python backend exited immediately; falling back to native diagnostic"; rm -f "$PIDFILE" "$MODEFILE"
+        start_native_diag "Python $PYVER was found at $PYTHON, but the backend exited during startup. See /tmp/${PKG}.log"; exit $?
+      fi
+      start_native_diag "Python $PYVER was found at $PYTHON, but this build requires Python 3.8 or newer"; exit $?
+    fi
+    start_native_diag "No usable Python 3 executable was found in DSM or Synology Python3 package paths"; exit $?
+    ;;
+  stop)
+    if is_running; then
+      PID="$(cat "$PIDFILE")"; log "Stopping pid=$PID"; kill "$PID" 2>/dev/null || true; i=0
+      while kill -0 "$PID" 2>/dev/null && [ "$i" -lt 20 ]; do sleep 1; i=$((i + 1)); done
+      kill -0 "$PID" 2>/dev/null && { log "Process did not stop in time; sending SIGKILL"; kill -9 "$PID" 2>/dev/null || true; }
+    fi
+    rm -f "$PIDFILE" "$MODEFILE"; exit 0
+    ;;
+  status)
+    is_running && exit 0
+    rm -f "$PIDFILE" "$MODEFILE"; exit 1
+    ;;
+  log) cat "$LOGFILE" 2>/dev/null || true; exit 0 ;;
+  *) echo "Usage: $0 {start|stop|status|log}" >&2; exit 1 ;;
 esac
