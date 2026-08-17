@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
-"""Build a DSM 6.1-compatible SPK using strict USTAR archives.
+"""Build the DSM 6.1+ x86_64 SPK using strict USTAR archives.
 
-The script intentionally avoids GNU/PAX tar extensions so older DSM 6.x
-Package Center versions can parse the archive more reliably.
+The package includes a statically linked native diagnostic HTTP server. If the
+Python backend cannot start on an older DSM installation, the package still
+stays in Running state and exposes the startup reason on port 9865.
 """
 from __future__ import annotations
 
 import argparse
 import gzip
 import io
-import os
 import shutil
-import stat
+import subprocess
 import tarfile
 import tempfile
 from pathlib import Path
@@ -21,10 +21,8 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def add_ustar(tf: tarfile.TarFile, path: Path, arcname: str) -> None:
     info = tf.gettarinfo(str(path), arcname=arcname)
-    info.uid = 0
-    info.gid = 0
-    info.uname = "root"
-    info.gname = "root"
+    info.uid = info.gid = 0
+    info.uname = info.gname = "root"
     info.mtime = 0
     if path.is_file():
         with path.open("rb") as handle:
@@ -43,21 +41,14 @@ def write_package_tgz(source: Path, destination: Path) -> None:
             gz.write(buffer.getvalue())
 
 
-def copy_tree_files(source: Path, destination: Path) -> None:
-    if not source.exists():
-        return
-    for path in source.rglob("*"):
-        target = destination / path.relative_to(source)
-        if path.is_dir():
-            target.mkdir(parents=True, exist_ok=True)
-        else:
-            target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(path, target)
+def copy_tree(source: Path, destination: Path) -> None:
+    if source.exists():
+        shutil.copytree(source, destination, dirs_exist_ok=True)
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--output", default=str(ROOT / "dist" / "Gen8-PhotoExifReader-0.1.1-0002-DSM6.1-noarch.spk"))
+    parser.add_argument("--output", default=str(ROOT / "dist" / "Gen8-PhotoExifReader-0.1.1-0003-DSM6.1-x86_64.spk"))
     args = parser.parse_args()
     output = Path(args.output).resolve()
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -69,20 +60,23 @@ def main() -> None:
         payload.mkdir()
         root.mkdir()
 
-        # Runtime payload.
-        copy_tree_files(ROOT / "backend", payload / "backend")
-        copy_tree_files(ROOT / "frontend", payload / "frontend")
-        copy_tree_files(ROOT / "runtime", payload / "runtime")
-        copy_tree_files(ROOT / "vendor", payload / "vendor")
+        copy_tree(ROOT / "backend", payload / "backend")
+        copy_tree(ROOT / "frontend", payload / "frontend")
+        copy_tree(ROOT / "runtime", payload / "runtime")
+        copy_tree(ROOT / "vendor", payload / "vendor")
+
+        native = payload / "native"
+        native.mkdir(parents=True, exist_ok=True)
+        subprocess.run([
+            "gcc", "-O2", "-static", "-s",
+            str(ROOT / "spk" / "native" / "diag_server.c"),
+            "-o", str(native / "diag-server"),
+        ], check=True)
+        (native / "diag-server").chmod(0o755)
 
         shutil.copy2(ROOT / "spk" / "INFO", root / "INFO")
         shutil.copytree(ROOT / "spk" / "scripts", root / "scripts")
-        if (ROOT / "spk" / "conf").exists():
-            shutil.copytree(ROOT / "spk" / "conf", root / "conf")
-        else:
-            (root / "conf").mkdir()
-            (root / "conf" / "privilege").write_text('{\n  "defaults": {\n    "run-as": "package"\n  }\n}\n', encoding="utf-8")
-
+        shutil.copytree(ROOT / "spk" / "conf", root / "conf")
         for icon in ("PACKAGE_ICON.PNG", "PACKAGE_ICON_256.PNG"):
             source = ROOT / "spk" / icon
             if source.exists():
@@ -90,14 +84,14 @@ def main() -> None:
 
         write_package_tgz(payload, root / "package.tgz")
 
-        order = ["INFO", "package.tgz", "scripts", "conf", "PACKAGE_ICON.PNG", "PACKAGE_ICON_256.PNG"]
+        order = ["INFO", "PACKAGE_ICON.PNG", "PACKAGE_ICON_256.PNG", "package.tgz", "scripts", "conf"]
         with tarfile.open(output, "w", format=tarfile.USTAR_FORMAT) as tf:
             for name in order:
                 path = root / name
                 if not path.exists():
                     continue
-                paths = [path] + sorted(path.rglob("*")) if path.is_dir() else [path]
-                for entry in paths:
+                entries = [path] + sorted(path.rglob("*")) if path.is_dir() else [path]
+                for entry in entries:
                     add_ustar(tf, entry, str(entry.relative_to(root)))
 
     print(output)
